@@ -1,287 +1,539 @@
-package windsurf
+import express from 'express';
+import bodyParser from 'body-parser';
+import fetch from 'node-fetch';
+import { v4 as uuidv4 } from 'uuid';
+import zlib from 'zlib';
+import { promisify } from 'util';
+import cors from 'cors';
 
-import (
-	"bytes"
-	"chatgpt-adapter/core/logger"
-	"compress/gzip"
-	"context"
-	"encoding/binary"
-	"errors"
-	"io"
-	"net/http"
-	"strings"
 
-	"chatgpt-adapter/core/common"
-	"chatgpt-adapter/core/gin/model"
-	"chatgpt-adapter/core/gin/response"
-	"github.com/bincooo/emit.io"
-	"github.com/gin-gonic/gin"
-	"github.com/golang/protobuf/proto"
-	"github.com/iocgo/sdk/env"
-	"github.com/iocgo/sdk/stream"
-)
 
-//var (
-//	g_token = ""
-//)
 
-func fetch(ctx *gin.Context, env *env.Environment, buffer []byte) (response *http.Response, err error) {
-	response, err = emit.ClientBuilder(common.HTTPClient).
-		Context(ctx.Request.Context()).
-		Proxies(env.GetString("server.proxied")).
-		POST("https://server.codeium.com/exa.api_server_pb.ApiServerService/GetChatMessage").
-		Header("user-agent", "connect-go/1.16.2 (go1.23.2 X:nocoverageredesign)").
-		Header("content-type", "application/connect+proto").
-		Header("connect-protocol-version", "1").
-		Header("accept-encoding", "identity").
-		Header("host", "server.codeium.com").
-		Header("connect-content-encoding", "gzip").
-		Header("connect-accept-encoding", "gzip").
-		Bytes(buffer).
-		DoC(statusCondition, emit.IsPROTO)
-	return
+
+// ... 其余代码保持不变 ...
+
+const gzip = promisify(zlib.gzip);
+const app = express();
+const port = 3000;
+// 添加cors中间件配置
+app.use(cors({
+    origin: '*', // 允许所有来源访问，生产环境建议设置具体的域名
+    methods: ['GET', 'POST', 'OPTIONS'], // 允许的HTTP方法
+    allowedHeaders: ['Content-Type', 'Authorization'], // 允许的请求头
+    credentials: true // 允许发送cookie
+}));
+// 修改 body-parser 配置，增加限制大小
+app.use(bodyParser.json({limit: '50mb'}));
+app.use(bodyParser.urlencoded({limit: '50mb', extended: true}));
+app.use(bodyParser.json());
+
+app.get('/test', (req, res) => {
+    console.log('Test endpoint hit!');
+    res.json({ message: 'Test successful' });
+});
+// OpenAI-style chat completions endpoint
+// ... existing code ...
+// ... existing code ...
+// 添加一个全局变量来追踪当前使用的密钥索引
+let currentKeyIndex = 0;
+// 修改 model list endpoint
+app.get('/v1/models', async (req, res) => {
+    const models = [
+        {
+            id: "claude-3.5-sonnet",
+            object: "model",
+            created: 1706745938,
+            owned_by: "windsurf"
+        }
+    ];
+
+    res.json({
+        object: "list",
+        data: models
+    });
+});
+// Helper function to encode length similar to the Python version
+function encodeLength(length) {
+    if (length < 128) {
+        return Buffer.from([length]);
+    } else if (length < 16384) {
+        const lowByte = (length & 0x7F) | 0x80;
+        const highByte = (length >> 7) & 0x7F;
+        return Buffer.from([lowByte, highByte]);
+    } else {
+        const lowByte = (length & 0x7F) | 0x80;
+        const midByte = ((length >> 7) & 0x7F) | 0x80;
+        const highByte = (length >> 14) & 0xFF;
+        return Buffer.from([lowByte, midByte, highByte]);
+    }
 }
 
-func convertRequest(completion model.Completion, ident, token string) (buffer []byte, err error) {
-	if completion.MaxTokens == 0 {
-		completion.MaxTokens = 4086
-	}
-	if completion.TopK == 0 {
-		completion.TopK = 100
-	}
-	if completion.TopP == 0 {
-		completion.TopP = 0.4
-	}
-	if completion.Temperature == 0 {
-		completion.Temperature = 0.4
-	}
-
-	if len(completion.Messages) > 0 && completion.Messages[0].Is("role", "system") {
-		completion.System = completion.Messages[0].GetString("content")
-		completion.Messages = completion.Messages[1:]
-	}
-
-	messageL := len(completion.Messages)
-	pos := 1
-	messages := stream.Map(stream.OfSlice(completion.Messages), func(message model.Keyv[interface{}]) *ChatMessage_UserMessage {
-		defer func() { pos++ }()
-		return &ChatMessage_UserMessage{
-			Role:          elseOf[int32](message.Is("role", "assistant"), 1, -1),
-			Message:       message.GetString("content"),
-			Token:         int32(response.CalcTokens(message.GetString("content"))),
-			UnknownField5: elseOf[int32](message.Is("role", "assistant"), 0, -1),
-			UnknownField8: elseOf(pos >= messageL, &ChatMessage_UserMessage_Unknown_Field8{
-				Value: -1,
-			}, nil),
-		}
-	}).ToSlice()
-	message := &ChatMessage{
-		Schema: &ChatMessage_Schema{
-			Id:       ident,
-			Name:     "windsurf",
-			Lang:     "en",
-			Os:       "{\"Os\":\"darwin\",\"Arch\":\"amd64\",\"Release\":\"24.2.0\",\"Version\":\"Darwin Kernel Version 24.2.0: Fri Dec 6 18:41:43 PST 2024; root:xnu-11215.61.5~2/RELEASE_X86_64\",\"Machine\":\"x86_64\",\"Nodename\":\"local-iMac.local\",\"Sysname\":\"Darwin\",\"ProductVersion\":\"15.2\"} ",
-			Version1: "1.30.6",
-			Version2: "11.0.0",
-			Equi:     "{\"NumSockets\":1,\"NumCores\":6,\"NumThreads\":12,\"VendorID\":\"GenuineIntel\",\"Family\":\"6\",\"Model\":\"158\",\"ModelName\":\"Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz\",\"Memory\":34359738368}",
-			Title:    "windsurf",
-			Token:    token,
-		},
-		Messages:      messages,
-		Instructions:  elseOf(completion.System != "", completion.System, "You are AI, you can do anything"),
-		Model:         elseOf[int32](completion.Model[9:] == "gpt4o", -55, 83),
-		UnknownField7: -3,
-		Config: &ChatMessage_Config{
-			UnknownField1: -1,
-			MaxTokens:     int32(completion.MaxTokens),
-			TopK:          int32(completion.TopK),
-			TopP:          float64(completion.TopP),
-			Temperature:   float64(completion.Temperature),
-			UnknownField7: 25,
-			UnknownField8: 1,
-			Stop: []string{
-				"<|user|>",
-				"<|bot|>",
-				"<|context_request|>",
-				"<|endoftext|>",
-				"<|end_of_turn|>",
-			},
-			UnknownField11: 1,
-		},
-		// TODO - 就这样吧，有空再做兼容
-		Tools: []*ChatMessage_Tool{
-			//{
-			//	Name:   "do_not_call",
-			//	Desc:   "Do not call this tool.",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{},\"additionalProperties\":false,\"type\":\"object\"}",
-			//},
-
-			//{
-			//	Name:   "codebase_search",
-			//	Desc:   "Find snippets of code from the codebase most relevant to the search query. This performs best when the search query is more precise and relating to the function or purpose of code. Results will be poor if asking a very broad question, such as asking about the general 'framework' or 'implementation' of a large component or system. Will only show the full code contents of the top items, and they may also be truncated. For other items it will only show the docstring and signature. Use view_code_item with the same path and node name to view the full code contents for any item. Note that if you try to search over more than 500 files, the quality of the search results will be substantially worse. Try to only search over a large number of files if it is really necessary.",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"Query\":{\"type\":\"string\",\"description\":\"Search query\"},\"TargetDirectories\":{\"items\":{\"type\":\"string\"},\"type\":\"array\",\"description\":\"List of absolute paths to directories to search over\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"Query\",\"TargetDirectories\"]}",
-			//},
-			//{
-			//	Name:   "grep_search",
-			//	Desc:   "Fast text-based search that finds exact pattern matches within files or directories, utilizing the ripgrep command for efficient searching. Results will be formatted in the style of ripgrep and can be configured to include line numbers and content. To avoid overwhelming output, the results are capped at 50 matches. Use the Includes option to filter the search scope by file types or specific paths to narrow down the results.",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"SearchDirectory\":{\"type\":\"string\",\"description\":\"The directory from which to run the ripgrep command. This path must be a directory not a file.\"},\"Query\":{\"type\":\"string\",\"description\":\"The search term or pattern to look for within files.\"},\"MatchPerLine\":{\"type\":\"boolean\",\"description\":\"If true, returns each line that matches the query, including line numbers and snippets of matching lines (equivalent to 'git grep -nI'). If false, only returns the names of files containing the query (equivalent to 'git grep -l').\"},\"Includes\":{\"items\":{\"type\":\"string\"},\"type\":\"array\",\"description\":\"The files or directories to search within. Supports file patterns (e.g., '*.txt' for all .txt files) or specific paths (e.g., 'path/to/file.txt' or 'path/to/dir').\"},\"CaseInsensitive\":{\"type\":\"boolean\",\"description\":\"If true, performs a case-insensitive search.\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"SearchDirectory\",\"Query\",\"MatchPerLine\",\"Includes\",\"CaseInsensitive\"]}",
-			//},
-			//{
-			//	Name:   "find_by_name",
-			//	Desc:   "This tool searches for files and directories within a specified directory, similar to the Linux `find` command. It supports glob patterns for searching and filtering which will all be passed in with -ipath. The patterns provided should match the relative paths from the search directory. They should use glob patterns with wildcards, for example, `**/*.py`, `**/*_test*`. You can specify file patterns to include or exclude, filter by type (file or directory), and limit the search depth. Results will include the type, size, modification time, and relative path.",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"SearchDirectory\":{\"type\":\"string\",\"description\":\"The directory to search within\"},\"Pattern\":{\"type\":\"string\",\"description\":\"Pattern to search for\"},\"Includes\":{\"items\":{\"type\":\"string\"},\"type\":\"array\",\"description\":\"Optional patterns to include. If specified\"},\"Excludes\":{\"items\":{\"type\":\"string\"},\"type\":\"array\",\"description\":\"Optional patterns to exclude. If specified\"},\"Type\":{\"type\":\"string\",\"enum\":[\"file\"],\"description\":\"Type filter (file\"},\"MaxDepth\":{\"type\":\"integer\",\"description\":\"Maximum depth to search\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"SearchDirectory\",\"Pattern\"]}",
-			//},
-			//{
-			//	Name:   "list_dir",
-			//	Desc:   "List the contents of a directory. Directory path must be an absolute path to a directory that exists. For each child in the directory, output will have: relative path to the directory, whether it is a directory or file, size in bytes if file, and number of children (recursive) if directory.",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"DirectoryPath\":{\"type\":\"string\",\"description\":\"Path to list contents of, should be absolute path to a directory\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"DirectoryPath\"]}",
-			//},
-			//{
-			//	Name:   "view_file",
-			//	Desc:   "  View the contents of a file. The lines of the file are 0-indexed, and the output of this tool call will be the file contents from StartLine to EndLine, together with a summary of the lines outside of StartLine and EndLine. Note that this call can view at most 200 lines at a time. When using this tool to gather information, it's your responsibility to ensure you have the COMPLETE context. Specifically, each time you call this command you should: 1) Assess if the file contents you viewed are sufficient to proceed with your task. 2) Take note of where there are lines not shown. These are represented by <... XX more lines from [code item] not shown ...> in the tool response. 3) If the file contents you have viewed are insufficient, and you suspect they may be in lines not shown, proactively call the tool again to view those lines. 4) When in doubt, call this tool again to gather more information. Remember that partial file views may miss critical dependencies, imports, or functionality.",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"AbsolutePath\":{\"type\":\"string\",\"description\":\"Path to file to view. Must be an absolute path.\"},\"StartLine\":{\"type\":\"integer\",\"description\":\"Startline to view\"},\"EndLine\":{\"type\":\"integer\",\"description\":\"Endline to view. This cannot be more than 200 lines away from StartLine\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"AbsolutePath\",\"StartLine\",\"EndLine\"]}",
-			//},
-			//{
-			//	Name:   "view_code_item",
-			//	Desc:   "View the content of a code item node, such as a class or a function in a file. You must use a fully qualified code item name. Such as those return by the grep_search tool. For example, if you have a class called `Foo` and you want to view the function definition `bar` in the `Foo` class, you would use `Foo.bar` as the NodeName. Do not request to view a symbol if the contents have been previously shown by the codebase_search tool. If the symbol is not found in a file, the tool will return an empty string instead.",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"File\":{\"type\":\"string\",\"description\":\"Absolute path to the node to edit, e.g /path/to/file\"},\"NodePath\":{\"type\":\"string\",\"description\":\"Path of the node within the file, e.g package.class.FunctionName\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"File\",\"NodePath\"]}",
-			//},
-			//{
-			//	Name:   "related_files",
-			//	Desc:   "Finds other files that are related to or commonly used with the input file. Useful for retrieving adjacent files to understand context or make next edits",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"absolutepath\":{\"type\":\"string\",\"description\":\"Input file absolute path\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"absolutepath\"]}",
-			//},
-			//{
-			//	Name:   "propose_code",
-			//	Desc:   "Do NOT make parallel edits to the same file. Use this tool to PROPOSE an edit to an existing file. This doesn't change the file, USER will have to review and apply the changes. Do not use if you just want to describe code. Follow these rules: 1. Specify ONLY the precise lines of code that you wish to edit. 2. **NEVER specify or write out unchanged code**. Instead, represent all unchanged code using this special placeholder: {{ ... }}. 3. To edit multiple, non-adjacent lines of code in the same file, make a single call to this tool. Specify each edit in sequence with the special placeholder {{ ... }} to represent unchanged code in between edited lines. Here's an example of how to edit three non-adjacent lines of code at once: <code> {{ ... }} edited_line_1 {{ ... }} edited_line_2 {{ ... }} edited_line_3 {{ ... }} </code> 4. NEVER output an entire file, this is very expensive. 5. You may not edit file extensions: [.ipynb] You should specify the following arguments before the others: [TargetFile]",
-			//	Schema: "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"properties\":{\"CodeMarkdownLanguage\":{\"type\":\"string\",\"description\":\"Markdown language for the code block, e.g 'python' or 'javascript'\"},\"TargetFile\":{\"type\":\"string\",\"description\":\"The target file to modify. Always specify the target file as the very first argument.\"},\"CodeEdit\":{\"type\":\"string\",\"description\":\"Specify ONLY the precise lines of code that you wish to edit. **NEVER specify or write out unchanged code**. Instead, represent all unchanged code using this special placeholder: {{ ... }}\"},\"Instruction\":{\"type\":\"string\",\"description\":\"A description of the changes that you are making to the file.\"},\"Blocking\":{\"type\":\"boolean\",\"description\":\"If true, the tool will block until the entire file diff is generated. If false, the diff will be generated asynchronously, while you respond. Only set to true if you must see the finished changes before responding to the USER. Otherwise, prefer false so that you can respond sooner with the assumption that the diff will be as you instructed.\"}},\"additionalProperties\":false,\"type\":\"object\",\"required\":[\"CodeMarkdownLanguage\",\"TargetFile\",\"CodeEdit\",\"Instruction\",\"Blocking\"]}",
-			//},
-		},
-		Choice:         elseOf(completion.Model[9:] == "gpt4o", &ChatMessage_ToolChoice{Value: "auto"}, nil),
-		UnknownField13: &ChatMessage_Unknown_Field13{Value: -1},
-	}
-
-	protoBytes, err := proto.Marshal(message)
-	if err != nil {
-		return
-	}
-
-	// 不用gzip编码了？
-	protoBytes, err = gzipCompressWithLevel(protoBytes, gzip.BestCompression)
-	if err != nil {
-		return
-	}
-
-	// magic 0不用gzip, 1需要gzip
-	header := int32ToBytes(1, len(protoBytes))
-	buffer = append(header, protoBytes...)
-	return
+function extractText(decompressedBuffer) {
+    const bytes = new Uint8Array(decompressedBuffer);
+    
+    // 寻找文本内容的起始位置
+    // 文本内容通常在 bot-id 和时间戳之后
+    let textStartIndex = -1;
+    for (let i = 0; i < bytes.length; i++) {
+        if (bytes[i] === 26) { // 0x1A 标记文本内容的开始
+            textStartIndex = i + 1;
+            break;
+        }
+    }
+    
+    if (textStartIndex === -1) {
+        return '';
+    }
+    
+    // 获取文本长度（通常在文本内容之前）
+    const textLength = bytes[textStartIndex];
+    textStartIndex++;
+    
+    // 提取文本内容
+    const textBytes = bytes.slice(textStartIndex, textStartIndex + textLength);
+    
+    try {
+        // 使用 TextDecoder 解码文本
+        const decoder = new TextDecoder('utf-8');
+        const text = decoder.decode(textBytes);
+        return text.replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/g, '').replace(/[ ]+$/g, '');
+    } catch (error) {
+        console.error('Error decoding text:', error);
+        return '';
+    }
 }
 
-func genToken(ctx context.Context, proxies, ident string) (token string, err error) {
-	//if g_token != "" {
-	//	token = g_token
-	//	return
-	//}
+// ... existing code ...
 
-	jwt := &Jwt{
-		Args: &Jwt_Args{
-			Name:     "windsurf",
-			Version1: "1.30.6",
-			Version2: "11.0.0",
-			Ident:    ident,
-			Lang:     "en",
-		},
-	}
-	buffer, err := proto.Marshal(jwt)
-	if err != nil {
-		return
-	}
+function extractText1(decompressedBuffer) {
+    // Split by 0x1a byte marker
+    const bytes = new Uint8Array(decompressedBuffer);
+    console.log('Bytes array:', Array.from(bytes));
+    const parts = decompressedBuffer.toString('binary').split('\x1a');
+    if (parts.length <= 1) {
+        return '';
+    }
+    
+    // Get the last part that contains the actual message
+    const lastPart = Buffer.from(parts[parts.length - 1], 'binary');
+    
+    // Remove first and last byte
+    try {
+        // console.log(lastPart);
+        let textBuffer = lastPart.slice(0, -1);
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        let text = decoder.decode(textBuffer);
+        const hasGarbledText = /[\x00-\x1F\x7F-\x9F]/.test(text);
+        // console.log('Contains replacement characters:', hasGarbledText);
+        if (hasGarbledText){
+            textBuffer = lastPart.slice(1, -1);
+            text = decoder.decode(textBuffer);
+        }
+        // console.log(text);
+        return text.replace(/[ ]+$/g, '');
+    } catch (error) {
+        const textBuffer = lastPart.slice(1, -1);
+        // Convert to string and remove only trailing spaces
+        const text = textBuffer.toString('utf8');
+        // console.log(1111);
 
-	res, err := emit.ClientBuilder(common.HTTPClient).
-		Context(ctx).
-		Proxies(proxies).
-		POST("https://server.codeium.com/exa.auth_pb.AuthService/GetUserJwt").
-		Header("user-agent", "connect-go/1.16.2 (go1.23.2 X:nocoverageredesign)").
-		Header("content-type", "application/proto").
-		Header("connect-protocol-version", "1").
-		Header("accept-encoding", "identity").
-		Header("host", "server.codeium.com").
-		Bytes(buffer).
-		DoC(statusCondition, emit.IsPROTO)
-	if err != nil {
-		return
-	}
-
-	defer res.Body.Close()
-	buffer, err = io.ReadAll(res.Body)
-	if err != nil {
-		return
-	}
-
-	var jwtToken JwtToken
-	err = proto.Unmarshal(buffer, &jwtToken)
-	if err != nil {
-		return
-	}
-
-	token = jwtToken.Value
-	//g_token = token
-	return
+        // console.log(text);
+        return text.replace(/[ ]+$/g, '');
+    }
 }
 
-func statusCondition(response *http.Response) error {
-	if response == nil {
-		return emit.Error{Code: -1, Bus: "Status", Err: errors.New("response is nil")}
-	}
+async function createRequestPayload(messages, jwt, {
+    systemPrompt = "you are Claude",
+    temperature = 0.9,
+    top_p = 0.9,
+    presence_penalty = 1.0,
+    frequency_penalty = 1.0
+} = {}) {
 
-	isJ := func(header http.Header) bool {
-		if header == nil {
-			return false
-		}
-		return strings.Contains(header.Get("Content-Type"), "application/json")
-	}
+    if (messages.length % 2 === 0) {
+        messages.unshift({ role: "system", content: systemPrompt });
+    }
 
-	if response.StatusCode != http.StatusOK {
-		msg := "internal error"
-		if isJ(response.Header) {
-			var err Error
-			if e := emit.ToObject(response, &err); e != nil {
-				logger.Error(e)
-			} else {
-				msg = err.Error()
-			}
-		}
-		_ = response.Body.Close()
-		return emit.Error{Code: response.StatusCode, Bus: "Status", Msg: msg, Err: errors.New(response.Status)}
-	}
-	return nil
+    const prexByte = Buffer.from([0x0a, 0x08, ...Buffer.from("windsurf"), 0x12, 0x06, ...Buffer.from("1.30.0"),
+        0x1a, ...Buffer.from("$6972fdaf-4f45-4aad-9154-45c4da494963"), 0x22, 0x02, ...Buffer.from("en"), 0x2a, 0x8d, 0x01,
+        ...Buffer.from('{"Os":"windows","Arch":"amd64","Version":"6.3","ProductName":"Windows 10 Pro","MajorVersionNumber":10,"MinorVersionNumber":0,"Build":"19045"}'),
+        0x3a, 0x0f, ...Buffer.from("Windsurf 1.94.0"), 0x42, 0xbe, 0x01,
+        ...Buffer.from('{"NumSockets":1,"NumCores":6,"NumThreads":12,"VendorID":"GenuineIntel","Family":"205","Model":"claude-3.5-sonnet","ModelName":"Intel(R) Core(TM) i5-10400 CPU @ 2.90GHz","Memory":34219245568}'),
+        0x62, 0x08, ...Buffer.from("windsurf"), 0xaa, 0x01
+    ]);
+
+    const jwtByte = Buffer.from(jwt);
+    const jwtLengthByte = encodeLength(jwtByte.length);
+    const prexLengthByte = encodeLength(jwtByte.length+jwtLengthByte.length+prexByte.length);
+    const systemPromptByte = Buffer.from(systemPrompt);
+    const systemPromptLengthByte = encodeLength(systemPromptByte.length);
+
+    const firstMessage = messages.shift();
+    const promptBytes = Buffer.from(firstMessage.content);
+    const promptLengthByte = encodeLength(promptBytes.length);
+    const promptLength1Byte = encodeLength(3 + promptBytes.length + promptLengthByte.length);
+
+    let finalPromptBytes = Buffer.concat([
+        Buffer.from([0x1a]),
+        promptLength1Byte,
+        Buffer.from([0x10, 0x01, 0x1a]),
+        promptLengthByte,
+        promptBytes
+    ]);
+    let isUser = false;
+    for (const message of messages) {
+        const msgBytes = Buffer.from(message.content);
+        const msgLengthByte = encodeLength(msgBytes.length);
+        const msgLength1Byte = encodeLength(3 + msgBytes.length + msgLengthByte.length);
+
+        if (isUser) {
+            // User message format
+            finalPromptBytes = Buffer.concat([
+                finalPromptBytes,
+                Buffer.from([0x8b, 0x03, 0x28, 0x01, 0x1a]),
+                msgLength1Byte,
+                Buffer.from([0x10, 0x01, 0x1a]),
+                msgLengthByte,
+                msgBytes
+            ]);
+            isUser = false;
+        } else {
+            // Assistant message format
+            finalPromptBytes = Buffer.concat([
+                finalPromptBytes,
+                Buffer.from([0x28, 0x01, 0x42, 0x02, 0x08, 0x01, 0x1a]),
+                msgLength1Byte,
+                Buffer.from([0x10, 0x02, 0x1a]),
+                msgLengthByte,
+                msgBytes,
+                Buffer.from([0x20]) // Space at the end
+            ]);
+            isUser = true;
+        }
+    }
+
+
+
+
+    const configBytes = Buffer.concat([
+        Buffer.from([0x28, 0x01, 0x42, 0x02, 0x08, 0x01, 0x30, 0xa6, 0x01, 0x38, 0x05, 0x42, 0x76, 0x08, 0x01, 0x10, 0x80, 0x40, 0x18, 0xc8, 0x01]),
+        // temperature
+        Buffer.from([0x29]), Buffer.from(new Float64Array([temperature]).buffer),
+        // top_p
+        Buffer.from([0x38, 0x32, 0x41]), Buffer.from(new Float64Array([top_p]).buffer),
+        // presence_penalty
+        Buffer.from([0x31]), Buffer.from(new Float64Array([presence_penalty]).buffer),
+        // 特殊标记
+        Buffer.from([0x4a, 0x08]), Buffer.from("<|user|>"),
+        Buffer.from([0x4a, 0x07]), Buffer.from("<|bot|>"),
+        Buffer.from([0x4a, 0x13]), Buffer.from("<|context_request|>"),
+        Buffer.from([0x4a, 0x0d]), Buffer.from("<|endoftext|>"),
+        Buffer.from([0x4a, 0x0f]), Buffer.from("<|end_of_turn|>"),
+        // frequency_penalty
+        Buffer.from([0x59]), Buffer.from(new Float64Array([frequency_penalty]).buffer)
+    ]);
+
+    const toolBytes = Buffer.from([
+        0x52, 0x98, 0x02, 0x0a, 0x05, ...Buffer.from("never"), 0x12, 0x00, 0x1a, 0x8c, 0x02,
+        ...Buffer.from('{"$schema":"","properties":{"AbsolutePath":{"type":"string","description":""},"StartLine":{"type":"integer","description":""},"EndLine":{"type":"integer","description":""}},"additionalProperties":false,"type":"object","required":["AbsolutePath","StartLine","EndLine"]}')
+    ]);
+
+    const totalByte = Buffer.concat([
+        Buffer.from([0x0a]),
+        prexLengthByte,
+        prexByte,
+        jwtLengthByte,
+        jwtByte,
+        Buffer.from([0x12]),
+        systemPromptLengthByte,
+        systemPromptByte,
+        finalPromptBytes,
+        configBytes,
+        // toolBytes,
+        Buffer.from([0x6a, 0x02, 0x08, 0x01])
+    ]);
+    console.log(totalByte);
+    const compressed = await gzip(totalByte);
+    const lengthBytes = Buffer.alloc(2);
+    lengthBytes.writeUInt16BE(compressed.length);
+    
+    return Buffer.concat([Buffer.from([0x01, 0x00, 0x00]), lengthBytes, compressed]);
 }
 
-func gzipCompressWithLevel(data []byte, level int) ([]byte, error) {
-	var buf bytes.Buffer
-	gzipWriter, err := gzip.NewWriterLevel(&buf, level)
-	if err != nil {
-		return nil, err
-	}
-	_, err = gzipWriter.Write(data)
-	gzipWriter.Close()
-	return buf.Bytes(), err
+// Add global JWT cache
+const jwtCache = new Map();
+const JWT_CACHE_DURATION = 3600000; // 1 hour in milliseconds
+
+// Add this function to get JWT from UID
+async function getJwtFromUid(uid) {
+    // Check cache first
+    const cachedJwt = jwtCache.get(uid);
+    if (cachedJwt && cachedJwt.timestamp > Date.now() - JWT_CACHE_DURATION) {
+        return cachedJwt.jwt;
+    }
+
+    // Convert uid to hex
+    const uidHex = Buffer.from(uid).toString('hex');
+    // Construct request payload
+    const payload = Buffer.concat([
+        Buffer.from([0x0A, 0x57, 0x0A, 0x08]), Buffer.from("windsurf"),
+        Buffer.from([0x12, 0x06]), Buffer.from("1.30.0"),
+        Buffer.from([0x1A, 0x24]), Buffer.from(uidHex,'hex'),
+        Buffer.from([0x22, 0x02]), Buffer.from("en"),
+        Buffer.from([0x3A, 0x0F]), Buffer.from("Windsurf 1.94.0b"),
+        Buffer.from([0x08]), Buffer.from("windsurf")
+    ]);
+    const response = await fetch('https://server.codeium.com/exa.auth_pb.AuthService/GetUserJwt', {
+        method: 'POST',
+        headers: {
+            'Host': 'server.codeium.com',
+            'User-Agent': 'connect-go/1.16.2 (go1.23.2 X:nocoverageredesign)',
+            'Accept-Encoding': 'gzip',
+            'Connect-Protocol-Version': '1',
+            'Connect-Timeout-Ms': '30000',
+            'Content-Type': 'application/proto',
+            'Content-Length': payload.length.toString()
+        },
+        body: payload
+    });
+
+    if (!response.ok) {
+        throw new Error(`Failed to get JWT: ${response}`);
+    }
+
+    const responseData = await response.arrayBuffer();
+    // Extract JWT from response (assuming it's in the response data)
+    const jwt = Buffer.from(responseData).slice(3).toString('utf8');
+    
+    // Cache the JWT
+    jwtCache.set(uid, {
+        jwt,
+        timestamp: Date.now()
+    });
+
+    return jwt;
 }
 
-func int32ToBytes(magic byte, num int) []byte {
-	hex := make([]byte, 4)
-	binary.BigEndian.PutUint32(hex, uint32(num))
-	return append([]byte{magic}, hex...)
-}
+// 添加在文件开头的配置部分
+const CONFIG = {
+    CHAT_TIMEOUT: 60000,  // 30秒超时
+    MAX_RETRIES: 3,       // 最大重试次数
+    RETRY_DELAY: 1000     // 重试间隔（毫秒）
+};
 
-func bytesToInt32(hex []byte) int {
-	return int(binary.BigEndian.Uint32(hex))
+// 添加重试函数
+async function fetchWithRetry(url, options, retries = CONFIG.MAX_RETRIES) {
+    try {
+        const response = await fetch(url, {
+            ...options,
+            timeout: CONFIG.CHAT_TIMEOUT,
+            headers: {
+                ...options.headers,
+                'Connect-Timeout-Ms': CONFIG.CHAT_TIMEOUT.toString()
+            }
+        });
+        return response;
+    } catch (error) {
+        if (retries > 0 && (error.code === 'ETIMEDOUT' || error.type === 'system')) {
+            console.log(`Retry attempt ${CONFIG.MAX_RETRIES - retries + 1}, waiting ${CONFIG.RETRY_DELAY}ms...`);
+            await new Promise(resolve => setTimeout(resolve, CONFIG.RETRY_DELAY));
+            return fetchWithRetry(url, options, retries - 1);
+        }
+        throw error;
+    }
 }
+// Modify the chat completions endpoint
+app.post('/v1/chat/completions', async (req, res) => {
+    try {
+        const { 
+            messages,
+            model,
+            temperature = 0.9,
+            top_p = 0.9,
+            presence_penalty = 1.0,
+            frequency_penalty = 1.0,
+            stream = false
+        } = req.body;
+        
+        const uid = req.headers.authorization?.replace('Bearer ', '');
+        
+        if (!uid) {
+            return res.status(401).json({ error: 'Authorization token required' });
+        }
 
-func elseOf[T any](condition bool, a1, a2 T) T {
-	if condition {
-		return a1
-	}
-	return a2
-}
+        // Get JWT using UID
+        const jwt = await getJwtFromUid(uid);
+        console.log(jwt);
+        if (!jwt) {
+            return res.status(401).json({ error: 'Failed to get JWT' });
+        }
+
+        // 提取非system消息并格式化
+        const userMessage = messages
+            .map(m => `${m.role}:${m.content}`)
+            .join('\n');
+        // 提取所有system消息并合并
+        const systemMessage = "you are Claude";
+
+        const payload = await createRequestPayload(messages, jwt, {
+            systemPrompt: systemMessage,
+            temperature,
+            top_p,
+            presence_penalty,
+            frequency_penalty
+        });
+
+        const response = await fetchWithRetry('https://server.codeium.com/exa.api_server_pb.ApiServerService/GetChatMessage', {
+            method: 'POST',
+            headers: {
+                'Host': 'server.codeium.com',
+                'User-Agent': 'connect-go/1.16.2 (go1.23.2 X:nocoverageredesign)',
+                'Accept-Encoding': 'identity',
+                'Connect-Accept-Encoding': 'gzip',
+                'Connect-Content-Encoding': 'gzip',
+                'Connect-Protocol-Version': '1',
+                'Content-Type': 'application/connect+proto'
+            },
+            body: payload
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        if (stream) {
+            // Streaming response
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+
+            let buffer = Buffer.from([]);
+            let fullResponse = '';
+            let resultStr = ""
+            response.body.on('data', chunk => {
+                buffer = Buffer.concat([buffer, chunk]);
+                
+                while (buffer.length >= 4) {
+                    if (buffer.readUInt32LE(0) === 1) {
+                        const gzipStart = buffer.indexOf(Buffer.from([0x1f, 0x8b, 0x08]));
+                        if (gzipStart !== -1) {
+                            const chunk = buffer.slice(gzipStart);
+                            try {
+                                if (!chunk.includes(Buffer.from([0x03, 0x00]))) {
+                                    const decompressed = zlib.gunzipSync(chunk);
+                                    
+                                    const text = extractText(decompressed);
+                                    resultStr = resultStr + text
+                                    if (resultStr.includes("user:") || 
+                                        resultStr.includes("Human:") || 
+                                        resultStr.includes("H:")) {
+                                        text = text.split("user:")[0]
+                                            .split("Human:")[0]
+                                            .split("H:")[0];
+                                    } else if (resultStr.endsWith("user") || 
+                                            resultStr.endsWith("Human") || 
+                                            resultStr.endsWith("H")){
+                                        resultStr = text;
+                                        continue;
+                                    }
+                                    if (text) {
+                                        fullResponse += text;
+                                        const openAIFormat = {
+                                            id: `chatcmpl-${uuidv4()}`,
+                                            object: 'chat.completion.chunk',
+                                            created: Math.floor(Date.now() / 1000),
+                                            model: model || 'codeium-default',
+                                            choices: [{
+                                                delta: { content: text },
+                                                index: 0,
+                                                finish_reason: null
+                                            }]
+                                        };
+                                        res.write(`data: ${JSON.stringify(openAIFormat)}\n\n`);
+                                    }
+                                    if (resultStr.includes("user:") || 
+                                        resultStr.includes("Human:") || 
+                                        resultStr.includes("H:")) {
+                                        break;
+                                    } 
+                                }
+                            } catch (e) {
+                                console.error('Decompression error:', e);
+                            }
+                            buffer = buffer.slice(gzipStart + chunk.length);
+                        } else {
+                            break;
+                        }
+                    } else {
+                        buffer = buffer.slice(1);
+                    }
+                }
+            });
+
+            response.body.on('end', () => {
+                res.write('data: [DONE]\n\n');
+                res.end();
+            });
+        } else {
+            // Non-streaming response
+            let buffer = Buffer.from([]);
+            let fullResponse = '';
+
+            for await (const chunk of response.body) {
+                buffer = Buffer.concat([buffer, chunk]);
+                
+                while (buffer.length >= 4) {
+                    if (buffer.readUInt32LE(0) === 1) {
+                        const gzipStart = buffer.indexOf(Buffer.from([0x1f, 0x8b, 0x08]));
+                        if (gzipStart !== -1) {
+                            const chunk = buffer.slice(gzipStart);
+                            try {
+                                if (!chunk.includes(Buffer.from([0x03, 0x00]))) {
+                                    const decompressed = zlib.gunzipSync(chunk);
+                                    const text = extractText(decompressed);
+                                    if (text) {
+                                        fullResponse += text;
+                                    }
+                                }
+                            } catch (e) {
+                                console.info(buffer)
+                                console.error('Decompression error:', e);
+                            }
+                            buffer = buffer.slice(gzipStart + chunk.length);
+                        } else {
+                            break;
+                        }
+                    } else {
+                        buffer = buffer.slice(1);
+                    }
+                }
+            }
+
+            // Return complete response in OpenAI format
+            const completionResponse = {
+                id: `chatcmpl-${uuidv4()}`,
+                object: 'chat.completion',
+                created: Math.floor(Date.now() / 1000),
+                model: model || 'codeium-default',
+                choices: [{
+                    message: {
+                        role: 'assistant',
+                        content: fullResponse
+                    },
+                    index: 0,
+                    finish_reason: 'stop'
+                }]
+            };
+
+            res.json(completionResponse);
+        }
+
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+app.listen(port, () => {
+    console.log(`Server running at http://localhost:${port}`);
+}); 
