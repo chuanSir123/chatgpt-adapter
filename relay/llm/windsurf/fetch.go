@@ -69,46 +69,7 @@ function encodeLength(length) {
 }
 
 function extractText(decompressedBuffer) {
-    const bytes = new Uint8Array(decompressedBuffer);
-    
-    // 寻找文本内容的起始位置
-    // 文本内容通常在 bot-id 和时间戳之后
-    let textStartIndex = -1;
-    for (let i = 0; i < bytes.length; i++) {
-        if (bytes[i] === 26) { // 0x1A 标记文本内容的开始
-            textStartIndex = i + 1;
-            break;
-        }
-    }
-    
-    if (textStartIndex === -1) {
-        return '';
-    }
-    
-    // 获取文本长度（通常在文本内容之前）
-    const textLength = bytes[textStartIndex];
-    textStartIndex++;
-    
-    // 提取文本内容
-    const textBytes = bytes.slice(textStartIndex, textStartIndex + textLength);
-    
-    try {
-        // 使用 TextDecoder 解码文本
-        const decoder = new TextDecoder('utf-8');
-        const text = decoder.decode(textBytes);
-        return text.replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/g, '').replace(/[ ]+$/g, '');
-    } catch (error) {
-        console.error('Error decoding text:', error);
-        return '';
-    }
-}
-
-// ... existing code ...
-
-function extractText1(decompressedBuffer) {
     // Split by 0x1a byte marker
-    const bytes = new Uint8Array(decompressedBuffer);
-    console.log('Bytes array:', Array.from(bytes));
     const parts = decompressedBuffer.toString('binary').split('\x1a');
     if (parts.length <= 1) {
         return '';
@@ -123,14 +84,8 @@ function extractText1(decompressedBuffer) {
         let textBuffer = lastPart.slice(0, -1);
         const decoder = new TextDecoder('utf-8', { fatal: true });
         let text = decoder.decode(textBuffer);
-        const hasGarbledText = /[\x00-\x1F\x7F-\x9F]/.test(text);
-        // console.log('Contains replacement characters:', hasGarbledText);
-        if (hasGarbledText){
-            textBuffer = lastPart.slice(1, -1);
-            text = decoder.decode(textBuffer);
-        }
         // console.log(text);
-        return text.replace(/[ ]+$/g, '');
+        return text.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, '').replace(/[\u0080-\u009F]/g, '').replace(/[ ]+$/g, '');
     } catch (error) {
         const textBuffer = lastPart.slice(1, -1);
         // Convert to string and remove only trailing spaces
