@@ -80,19 +80,20 @@ function extractText(decompressedBuffer) {
     
     // Remove first and last byte
     try {
-        // console.log(lastPart);
-        let textBuffer = lastPart.slice(0, -1);
+        console.log(lastPart);
+        let textBuffer = lastPart[0] === 0x0a ? 
+            lastPart.slice(0, -1) : 
+            lastPart.slice(1, -1);
         const decoder = new TextDecoder('utf-8', { fatal: true });
         let text = decoder.decode(textBuffer);
-        // console.log(text);
-        return text.replace(/[\x00-\x09\x0B\x0C\x0E-\x1F\x7F]/g, '').replace(/[\u0080-\u009F]/g, '').replace(/[ ]+$/g, '');
+        console.log(text);
+        return text.replace(/[ ]+$/g, '');
     } catch (error) {
-        const textBuffer = lastPart.slice(1, -1);
+        const textBuffer = lastPart.slice(0, -1);
         // Convert to string and remove only trailing spaces
         const text = textBuffer.toString('utf8');
-        // console.log(1111);
-
-        // console.log(text);
+        console.log(1111);
+        console.log(text);
         return text.replace(/[ ]+$/g, '');
     }
 }
